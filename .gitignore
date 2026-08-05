@@ -33,3 +33,7 @@ Thumbs.db
 # MLflow 
 mlruns/
 mlartifacts/
+
+# Raw data 
+data/*.csv
+!data/.gitkeep
