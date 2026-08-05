@@ -1,0 +1,90 @@
+"""
+PCA (Dimensionality Reduction) — built directly on sklearn.
+
+This module wraps sklearn.decomposition.PCA with the evaluation utilities
+needed in practice: choosing k by variance target, measuring
+reconstruction error, and comparing a downstream model's performance on
+the full feature set vs. the PCA-reduced one.
+"""
+
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import LogisticRegression
+
+
+def standardize(X):
+    """
+    Fit a StandardScaler and return (X_scaled, scaler).
+    PCA is scale-sensitive -- always standardize first, or high-magnitude
+    features (e.g. total_charges in the thousands) will dominate the
+    principal components purely because of units, not real signal.
+    """
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    return X_scaled, scaler
+
+
+def fit_full_pca(X_scaled):
+    """Fit PCA keeping all components, for inspecting variance explained
+    per component (scree plot) before deciding how many to keep."""
+    pca = PCA(n_components=None, random_state=42)
+    pca.fit(X_scaled)
+    return pca
+
+
+def n_components_for_variance(pca_full, target=0.90):
+    """How many components are needed to reach `target` cumulative
+    explained variance."""
+    cum_var = np.cumsum(pca_full.explained_variance_ratio_)
+    return int(np.argmax(cum_var >= target) + 1), cum_var
+
+
+def reconstruction_error_by_k(X_scaled, k_values):
+    """
+    For each candidate k, fit PCA, project, project back
+    (inverse_transform), and measure mean squared reconstruction error.
+    This is the direct way to answer "how much information did we lose"
+    -- lower error at a given k is better.
+    """
+    errors = []
+    for k in k_values:
+        pca = PCA(n_components=k, random_state=42)
+        X_reduced = pca.fit_transform(X_scaled)
+        X_reconstructed = pca.inverse_transform(X_reduced)
+        mse = np.mean((X_scaled - X_reconstructed) ** 2)
+        errors.append(mse)
+    return errors
+
+
+def compare_downstream_performance(X_scaled, y, k, cv=5):
+    """
+    The evaluation that actually matters in most real projects: does
+    reducing to k components help or hurt a downstream classifier,
+    compared to using every original feature?
+    Returns (score_full, score_pca).
+    """
+    model_full = LogisticRegression(max_iter=1000)
+    score_full = cross_val_score(model_full, X_scaled, y, cv=cv).mean()
+
+    pca = PCA(n_components=k, random_state=42)
+    X_reduced = pca.fit_transform(X_scaled)
+    model_pca = LogisticRegression(max_iter=1000)
+    score_pca = cross_val_score(model_pca, X_reduced, y, cv=cv).mean()
+
+    return score_full, score_pca
+
+
+def get_loadings(pca, feature_names, n_components=2):
+    """
+    Component loadings: how much each original feature contributes to
+    each principal component. Lets you interpret what PC1/PC2 'mean' in
+    terms of the original columns.
+    """
+    return pd.DataFrame(
+        pca.components_[:n_components].T,
+        index=feature_names,
+        columns=[f"PC{i+1}" for i in range(n_components)],
+    )
